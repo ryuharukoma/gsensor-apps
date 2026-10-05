@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Circuit G Logger</title>
+<style>
+:root{--bg:#e9e9e4;--fg:#18181a;--mut:#6c6c66;--ac:#d8232a;--ln:#bdbdb5;--pad:#f6f6f2;box-sizing:border-box;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+@media(prefers-color-scheme:dark){:root{--bg:#121315;--fg:#ecece6;--mut:#8b8b86;--ln:#33353a;--pad:#1b1c1f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 "Hiragino Sans","Helvetica Neue",sans-serif;max-width:520px;margin:auto;padding:12px}
+.num{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.02em}
+#lat{font-size:84px;line-height:1;color:var(--ac)}
+.row{display:flex;gap:16px;align-items:flex-end;margin-bottom:8px}
+.row>div{flex:1}
+.k{color:var(--mut);font-size:12px}
+.v{font-size:28px}
+canvas{width:100%;display:block;background:var(--pad);border:1px solid var(--ln);border-radius:4px;margin-bottom:8px}
+#gg{aspect-ratio:1}#st{height:90px}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+button{font:inherit;padding:12px;border:1px solid var(--fg);background:transparent;color:var(--fg);border-radius:4px}
+button:focus-visible,select:focus-visible{outline:3px solid var(--ac)}
+button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.set{display:flex;gap:12px;align-items:center;color:var(--mut);font-size:13px;flex-wrap:wrap}
+#msg{margin-top:8px;font-size:13px;color:var(--mut);min-height:2.6em}
+#laps{font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="row">
+  <div><div class="k">横G</div><div id="lat" class="num">0.00</div></div>
+  <div><div class="k">最大横G</div><div id="pk" class="num v">0.00</div>
+       <div class="k">速度 km/h</div><div id="sp" class="num v">--</div></div>
+</div>
+<div class="row">
+  <div><div class="k">ラップ</div><div id="lp" class="num v">0</div></div>
+  <div><div class="k">直近ラップ</div><div id="lt" class="num v">--</div></div>
+</div>
+<canvas id="gg" width="480" height="480"></canvas>
+<canvas id="st" width="480" height="90"></canvas>
+<div class="btns">
+  <button id="bStart">センサー開始</button>
+  <button id="bRec" disabled>記録 開始</button>
+  <button id="bCal" disabled>ゼロ較正（停車中）</button>
+  <button id="bLine" disabled>ここをスタートライン</button>
+  <button id="bCsv" disabled style="grid-column:span 2">CSVを保存</button>
+</div>
+<div class="set">
+  携帯の横軸:
+  <select id="ax"><option value="x">x（長辺と直角）</option><option value="y">y（長辺方向）</option></select>
+  <label><input type="checkbox" id="inv"> 符号反転</label>
+</div>
+<div id="laps"></div>
+<div id="msg">HTTPSで開き、携帯を車に固定してから「センサー開始」を押してください。</div>
+
+<script>
+const $=id=>document.getElementById(id), G=9.80665;
+let run=false,cal=null,off={x:0,y:0},cur={lat:0,lon:0},peak=0,gps=null,prev=null,o=null,line=null,lastX=null,lap=0,laps=[],rows=[],trail=[],strip=[];
+const msg=t=>$('msg').textContent=t;
+
+function axes(a){
+  const s=$('inv').checked?-1:1, x=$('ax').value==='x';
+  return {lat:s*(x?a.x:a.y)/G, lon:s*(x?a.y:-a.x)/G};
+}
+
+function onMotion(e){
+  const a=e.acceleration;
+  if(!a||a.x==null)return;
+  if(cal){cal.x+=a.x;cal.y+=a.y;cal.n++;}
+  cur=axes({x:a.x-off.x,y:a.y-off.y});
+  const now=Date.now(), r=e.rotationRate||{};
+  trail.push([now,cur.lat,cur.lon]); strip.push([now,cur.lat]);
+  while(trail.length&&now-trail[0][0]>2500)trail.shift();
+  while(strip.length&&now-strip[0][0]>10000)strip.shift();
+  if(Math.abs(cur.lat)>peak)peak=Math.abs(cur.lat);
+  if(run){
+    const g=gps||{};
+    rows.push([now,cur.lat.toFixed(3),cur.lon.toFixed(3),(a.x/G).toFixed(3),(a.y/G).toFixed(3),(a.z/G).toFixed(3),
+      (r.alpha||0).toFixed(1),(r.beta||0).toFixed(1),(r.gamma||0).toFixed(1),
+      g.lat??'',g.lon??'',g.v!=null?(g.v*3.6).toFixed(1):'',g.h??'',g.acc??'',g.t??'',lap].join(','));
+  }
+}
+
+function loc(lat,lon){
+  if(!o)o={lat,lon};
+  return {x:(lon-o.lon)*Math.cos(o.lat*Math.PI/180)*111320,y:(lat-o.lat)*110540};
+}
+
+function onGps(p){
+  const c=p.coords, q={t:p.timestamp,...loc(c.latitude,c.longitude)};
+  let v=c.speed;
+  if(v==null&&prev)v=Math.hypot(q.x-prev.x,q.y-prev.y)/((q.t-prev.t)/1000||1);
+  gps={t:p.timestamp,lat:c.latitude,lon:c.longitude,v,h:c.heading,acc:c.accuracy,x:q.x,y:q.y};
+  if(prev&&line&&run)crossing(prev,q);
+  prev=q;
+}
+
+function crossing(p,q){
+  const cr=(a,b)=>a[0]*b[1]-a[1]*b[0];
+  const r=[q.x-p.x,q.y-p.y], s=[line.B[0]-line.A[0],line.B[1]-line.A[1]], d=cr(r,s);
+  if(!d)return;
+  const w=[line.A[0]-p.x,line.A[1]-p.y], t=cr(w,s)/d, u=cr(w,r)/d;
+  if(t<0||t>1||u<0||u>1)return;
+  const tc=p.t+t*(q.t-p.t);            // 1Hz GPSの2点間を補間して通過時刻を推定
+  if(lastX!==null){
+    if(tc-lastX<20000)return;           // 誤検出防止（20秒未満は無視）
+    const lt=tc-lastX; laps.push(lt); lap++;
+    $('lt').textContent=fmt(lt);
+    $('laps').textContent=laps.map((x,i)=>'L'+(i+1)+' '+fmt(x)).join('  ');
+  }
+  lastX=tc; if(lastX&&!laps.length)lap=1;
+}
+const fmt=ms=>{const s=ms/1000;return Math.floor(s/60)+':'+(s%60).toFixed(3).padStart(6,'0')};
+
+$('bStart').onclick=async()=>{
+  try{
+    if(typeof DeviceMotionEvent!=='undefined'&&DeviceMotionEvent.requestPermission){
+      if(await DeviceMotionEvent.requestPermission()!=='granted'){msg('モーションセンサーの許可が必要です。Safariを再読み込みして再度許可してください。');return;}
+    }
+    addEventListener('devicemotion',onMotion);
+    navigator.geolocation.watchPosition(onGps,e=>msg('GPSエラー: '+e.message),{enableHighAccuracy:true,maximumAge:0,timeout:10000});
+    try{await navigator.wakeLock.request('screen');}catch(_){}
+    ['bRec','bCal','bLine','bCsv'].forEach(i=>$(i).disabled=false);
+    $('bStart').disabled=true; msg('センサー動作中。停車中にゼロ較正→記録開始。');
+  }catch(e){msg('開始できません: '+e.message+'（HTTPSで開いていますか？）');}
+};
+$('bCal').onclick=()=>{cal={x:0,y:0,n:0};msg('較正中…1.5秒間動かさないでください');
+  setTimeout(()=>{if(cal.n){off={x:cal.x/cal.n,y:cal.y/cal.n};}cal=null;peak=0;msg('較正完了');},1500);};
+$('bRec').onclick=()=>{run=!run;$('bRec').classList.toggle('on',run);$('bRec').textContent=run?'記録 停止':'記録 開始';
+  if(run){lastX=null;lap=0;laps=[];peak=0;msg('記録中');}else msg('停止。'+rows.length+'行');};
+$('bLine').onclick=()=>{
+  if(!gps){msg('GPS測位待ちです');return;}
+  let h=gps.h;
+  if(h==null||isNaN(h)){msg('走行中（進行方向が取れる状態）でタップしてください');return;}
+  h=h*Math.PI/180; const n=[Math.cos(h),-Math.sin(h)], c=[gps.x,gps.y], w=30; // ライン幅±30m
+  line={A:[c[0]+w*n[0],c[1]+w*n[1]],B:[c[0]-w*n[0],c[1]-w*n[1]]};
+  lastX=null; msg('スタートラインを設定しました。次に通過した時点から計測します。');
+};
+$('bCsv').onclick=()=>{
+  const head='epoch_ms,lat_g,lon_g,ax_g,ay_g,az_g,rot_alpha,rot_beta,rot_gamma,gps_lat,gps_lon,speed_kmh,heading,gps_acc_m,gps_time,lap';
+  const b=new Blob(['\ufeff'+head+'\n'+rows.join('\n')],{type:'text/csv'});
+  const a=document.createElement('a'), d=new Date();
+  a.href=URL.createObjectURL(b); a.download='g_log_'+d.toISOString().slice(0,19).replace(/[:T-]/g,'')+'.csv';
+  document.body.appendChild(a);a.click();a.remove();
+};
+
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n);
+function draw(){
+  $('lat').textContent=Math.abs(cur.lat).toFixed(2);
+  $('pk').textContent=peak.toFixed(2);
+  $('sp').textContent=gps&&gps.v!=null?(gps.v*3.6).toFixed(0):'--';
+  $('lp').textContent=lap;
+  const g=$('gg').getContext('2d'),W=480,R=2,m=W/2,k=(m-16)/R;
+  g.clearRect(0,0,W,W); g.strokeStyle=css('--ln'); g.fillStyle=css('--mut'); g.lineWidth=1; g.font='13px sans-serif';
+  for(let i=0.5;i<=R;i+=0.5){g.beginPath();g.arc(m,m,i*k,0,7);g.stroke();if(i%1==0)g.fillText(i+'G',m+4,m-i*k+14);}
+  g.beginPath();g.moveTo(m,0);g.lineTo(m,W);g.moveTo(0,m);g.lineTo(W,m);g.stroke();
+  const now=Date.now();
+  trail.forEach(p=>{const a=1-(now-p[0])/2500;g.fillStyle='rgba(216,35,42,'+(a*.6)+')';g.fillRect(m+p[1]*k-2,m-p[2]*k-2,4,4);});
+  g.fillStyle=css('--ac');g.beginPath();g.arc(m+cur.lat*k,m-cur.lon*k,8,0,7);g.fill();
+  const s=$('st').getContext('2d'),H=90;
+  s.clearRect(0,0,W,H);s.strokeStyle=css('--ln');s.beginPath();s.moveTo(0,H/2);s.lineTo(W,H/2);s.stroke();
+  s.strokeStyle=css('--ac');s.lineWidth=2;s.beginPath();
+  strip.forEach((p,i)=>{const x=W-(now-p[0])/10000*W,y=H/2-p[1]/R*(H/2-4);i?s.lineTo(x,y):s.moveTo(x,y);});s.stroke();
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
