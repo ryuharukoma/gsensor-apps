@@ -36,6 +36,10 @@ button.on{background:var(--ac);border-color:var(--ac);color:#fff}
   <div><div class="k">ラップ</div><div id="lp" class="num v">0</div></div>
   <div><div class="k">直近ラップ</div><div id="lt" class="num v">--</div></div>
 </div>
+<div class="row">
+  <div><div class="k">ロール °</div><div id="rl" class="num v">--</div></div>
+  <div><div class="k">ピッチ °</div><div id="pt" class="num v">--</div></div>
+</div>
 <canvas id="gg" width="480" height="480"></canvas>
 <canvas id="st" width="480" height="90"></canvas>
 <div class="btns">
@@ -46,8 +50,8 @@ button.on{background:var(--ac);border-color:var(--ac);color:#fff}
   <button id="bCsv" disabled style="grid-column:span 2">CSVを保存</button>
 </div>
 <div class="set">
-  携帯の横軸:
-  <select id="ax"><option value="x">x（長辺と直角）</option><option value="y">y（長辺方向）</option></select>
+  取り付け:
+  <select id="ax"><option value="x">画面上向きで平置き（短辺が左右）</option><option value="y">画面上向きで平置き（長辺が左右）</option><option value="z">画面を運転席側に向けて立てる（短辺が左右）</option></select>
   <label><input type="checkbox" id="inv"> 符号反転</label>
 </div>
 <div id="laps"></div>
@@ -55,19 +59,33 @@ button.on{background:var(--ac);border-color:var(--ac);color:#fff}
 
 <script>
 const $=id=>document.getElementById(id), G=9.80665;
-let wid=null,wl=null,run=false,cal=null,off={x:0,y:0},cur={lat:0,lon:0},peak=0,gps=null,prev=null,o=null,line=null,lastX=null,lap=0,laps=[],rows=[],trail=[],strip=[];
+let wid=null,wl=null,run=false,cal=null,off={x:0,y:0,z:0},ori={roll:0,pitch:0},offO={roll:0,pitch:0},calO=null,cur={lat:0,lon:0},peak=0,gps=null,prev=null,o=null,line=null,lastX=null,lap=0,laps=[],rows=[],trail=[],strip=[];
 const msg=t=>$('msg').textContent=t;
 
+// 取り付け方ごとの「車の横方向(L)・前方向(F)」を端末座標で表す
+const MV={x:{L:[1,0,0],F:[0,1,0]},y:{L:[0,1,0],F:[-1,0,0]},z:{L:[1,0,0],F:[0,0,-1]}};
 function axes(a){
-  const s=$('inv').checked?-1:1, x=$('ax').value==='x';
-  return {lat:s*(x?a.x:a.y)/G, lon:s*(x?a.y:-a.x)/G};
+  const s=$('inv').checked?-1:1, m=MV[$('ax').value], d=v=>v[0]*a.x+v[1]*a.y+v[2]*a.z;
+  return {lat:s*d(m.L)/G, lon:s*d(m.F)/G};
+}
+// ロール・ピッチ: 端末の姿勢(OSがジャイロ+加速度を合成した値)から、
+// 車の横軸/前軸が水平面からどれだけ傾いたかを求める（ジンバルロックの影響を受けない）
+function onOri(e){
+  if(e.beta==null)return;
+  const b=e.beta*Math.PI/180, g=e.gamma*Math.PI/180;
+  const row=[-Math.cos(b)*Math.sin(g),Math.sin(b),Math.cos(b)*Math.cos(g)]; // 端末各軸の鉛直成分
+  const m=MV[$('ax').value], s=$('inv').checked?-1:1;
+  const ang=v=>Math.asin(Math.max(-1,Math.min(1,s*(v[0]*row[0]+v[1]*row[1]+v[2]*row[2]))))*180/Math.PI;
+  const roll=ang(m.L), pitch=ang(m.F);
+  if(calO){calO.r+=roll;calO.p+=pitch;calO.n++;}
+  ori={roll:roll-offO.roll,pitch:pitch-offO.pitch};
 }
 
 function onMotion(e){
   const a=e.acceleration;
   if(!a||a.x==null)return;
-  if(cal){cal.x+=a.x;cal.y+=a.y;cal.n++;}
-  cur=axes({x:a.x-off.x,y:a.y-off.y});
+  if(cal){cal.x+=a.x;cal.y+=a.y;cal.z+=a.z;cal.n++;}
+  cur=axes({x:a.x-off.x,y:a.y-off.y,z:a.z-off.z});
   const now=Date.now(), r=e.rotationRate||{};
   trail.push([now,cur.lat,cur.lon]); strip.push([now,cur.lat]);
   while(trail.length&&now-trail[0][0]>2500)trail.shift();
@@ -77,7 +95,7 @@ function onMotion(e){
     const g=gps||{};
     rows.push([now,cur.lat.toFixed(3),cur.lon.toFixed(3),(a.x/G).toFixed(3),(a.y/G).toFixed(3),(a.z/G).toFixed(3),
       (r.alpha||0).toFixed(1),(r.beta||0).toFixed(1),(r.gamma||0).toFixed(1),
-      g.lat??'',g.lon??'',g.v!=null?(g.v*3.6).toFixed(1):'',g.h??'',g.acc??'',g.t??'',lap].join(','));
+      g.lat??'',g.lon??'',g.v!=null?(g.v*3.6).toFixed(1):'',g.h??'',g.acc??'',g.t??'',lap,ori.roll.toFixed(2),ori.pitch.toFixed(2)].join(','));
   }
 }
 
@@ -114,6 +132,7 @@ const fmt=ms=>{const s=ms/1000;return Math.floor(s/60)+':'+(s%60).toFixed(3).pad
 
 function stopSensors(){
   removeEventListener('devicemotion',onMotion);
+  removeEventListener('deviceorientation',onOri);
   if(wid!==null)navigator.geolocation.clearWatch(wid);
   wid=null;
   try{if(wl)wl.release();}catch(_){}
@@ -127,17 +146,21 @@ $('bStart').onclick=async()=>{
   if(wid!==null){stopSensors();return;}
   try{
     if(typeof DeviceMotionEvent!=='undefined'&&DeviceMotionEvent.requestPermission){
-      if(await DeviceMotionEvent.requestPermission()!=='granted'){msg('モーションセンサーの許可が必要です。Safariを再読み込みして再度許可してください。');return;}
+      const pr=await Promise.all([DeviceMotionEvent.requestPermission(),typeof DeviceOrientationEvent!=='undefined'&&DeviceOrientationEvent.requestPermission?DeviceOrientationEvent.requestPermission():'granted']);
+      if(pr.some(x=>x!=='granted')){msg('モーションセンサーの許可が必要です。Safariを再読み込みして再度許可してください。');return;}
     }
     addEventListener('devicemotion',onMotion);
+    addEventListener('deviceorientation',onOri);
     wid=navigator.geolocation.watchPosition(onGps,e=>msg('GPSエラー: '+e.message),{enableHighAccuracy:true,maximumAge:0,timeout:10000});
     try{wl=await navigator.wakeLock.request('screen');}catch(_){}
     ['bRec','bCal','bLine','bCsv'].forEach(i=>$(i).disabled=false);
     $('bStart').textContent='センサー停止（省電力）';$('bStart').classList.add('on');draw();msg('センサー動作中。停車中にゼロ較正→記録開始。');
   }catch(e){msg('開始できません: '+e.message+'（HTTPSで開いていますか？）');}
 };
-$('bCal').onclick=()=>{cal={x:0,y:0,n:0};msg('較正中…1.5秒間動かさないでください');
-  setTimeout(()=>{if(cal.n){off={x:cal.x/cal.n,y:cal.y/cal.n};}cal=null;peak=0;msg('較正完了');},1500);};
+$('bCal').onclick=()=>{cal={x:0,y:0,z:0,n:0};calO={r:0,p:0,n:0};msg('較正中…1.5秒間動かさないでください（水平な場所で）');
+  setTimeout(()=>{if(cal.n){off={x:cal.x/cal.n,y:cal.y/cal.n,z:cal.z/cal.n};}
+    if(calO.n){offO={roll:calO.r/calO.n,pitch:calO.p/calO.n};}
+    cal=null;calO=null;peak=0;msg('較正完了（加速度・ロール・ピッチをゼロに）');},1500);};
 $('bRec').onclick=()=>{run=!run;$('bRec').classList.toggle('on',run);$('bRec').textContent=run?'記録 停止':'記録 開始';
   if(run){lastX=null;lap=0;laps=[];peak=0;msg('記録中');}else msg('停止。'+rows.length+'行');};
 $('bLine').onclick=()=>{
@@ -149,7 +172,7 @@ $('bLine').onclick=()=>{
   lastX=null; msg('スタートラインを設定しました。次に通過した時点から計測します。');
 };
 $('bCsv').onclick=()=>{
-  const head='epoch_ms,lat_g,lon_g,ax_g,ay_g,az_g,rot_alpha,rot_beta,rot_gamma,gps_lat,gps_lon,speed_kmh,heading,gps_acc_m,gps_time,lap';
+  const head='epoch_ms,lat_g,lon_g,ax_g,ay_g,az_g,rot_alpha,rot_beta,rot_gamma,gps_lat,gps_lon,speed_kmh,heading,gps_acc_m,gps_time,lap,roll_deg,pitch_deg';
   const b=new Blob(['\ufeff'+head+'\n'+rows.join('\n')],{type:'text/csv'});
   const a=document.createElement('a'), d=new Date();
   a.href=URL.createObjectURL(b); a.download='g_log_'+d.toISOString().slice(0,19).replace(/[:T-]/g,'')+'.csv';
@@ -161,7 +184,7 @@ function draw(){
   $('lat').textContent=Math.abs(cur.lat).toFixed(2);
   $('pk').textContent=peak.toFixed(2);
   $('sp').textContent=gps&&gps.v!=null?(gps.v*3.6).toFixed(0):'--';
-  $('lp').textContent=lap;
+  $('lp').textContent=lap;$('rl').textContent=ori.roll.toFixed(1);$('pt').textContent=ori.pitch.toFixed(1);
   const g=$('gg').getContext('2d'),W=480,R=2,m=W/2,k=(m-16)/R;
   g.clearRect(0,0,W,W); g.strokeStyle=css('--ln'); g.fillStyle=css('--mut'); g.lineWidth=1; g.font='13px sans-serif';
   for(let i=0.5;i<=R;i+=0.5){g.beginPath();g.arc(m,m,i*k,0,7);g.stroke();if(i%1==0)g.fillText(i+'G',m+4,m-i*k+14);}
