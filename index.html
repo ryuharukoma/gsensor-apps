@@ -95,7 +95,7 @@ function onMotion(e){
     const g=gps||{};
     rows.push([now,cur.lat.toFixed(3),cur.lon.toFixed(3),(a.x/G).toFixed(3),(a.y/G).toFixed(3),(a.z/G).toFixed(3),
       (r.alpha||0).toFixed(1),(r.beta||0).toFixed(1),(r.gamma||0).toFixed(1),
-      g.lat??'',g.lon??'',g.v!=null?(g.v*3.6).toFixed(1):'',g.h??'',g.acc??'',g.t??'',lap,ori.roll.toFixed(2),ori.pitch.toFixed(2)].join(','));
+      g.lat??'',g.lon??'',g.v!=null?(g.v*3.6).toFixed(1):'',g.h??'',g.acc??'',g.t??'',lap,ori.roll.toFixed(2),ori.pitch.toFixed(2),$('ax').value].join(','));
   }
 }
 
@@ -172,7 +172,7 @@ $('bLine').onclick=()=>{
   lastX=null; msg('スタートラインを設定しました。次に通過した時点から計測します。');
 };
 $('bCsv').onclick=()=>{
-  const head='epoch_ms,lat_g,lon_g,ax_g,ay_g,az_g,rot_alpha,rot_beta,rot_gamma,gps_lat,gps_lon,speed_kmh,heading,gps_acc_m,gps_time,lap,roll_deg,pitch_deg';
+  const head='epoch_ms,lat_g,lon_g,ax_g,ay_g,az_g,rot_alpha,rot_beta,rot_gamma,gps_lat,gps_lon,speed_kmh,heading,gps_acc_m,gps_time,lap,roll_deg,pitch_deg,mount';
   const b=new Blob(['\ufeff'+head+'\n'+rows.join('\n')],{type:'text/csv'});
   const a=document.createElement('a'), d=new Date();
   a.href=URL.createObjectURL(b); a.download='g_log_'+d.toISOString().slice(0,19).replace(/[:T-]/g,'')+'.csv';
