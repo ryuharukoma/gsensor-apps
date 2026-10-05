@@ -55,7 +55,7 @@ button.on{background:var(--ac);border-color:var(--ac);color:#fff}
 
 <script>
 const $=id=>document.getElementById(id), G=9.80665;
-let run=false,cal=null,off={x:0,y:0},cur={lat:0,lon:0},peak=0,gps=null,prev=null,o=null,line=null,lastX=null,lap=0,laps=[],rows=[],trail=[],strip=[];
+let wid=null,wl=null,run=false,cal=null,off={x:0,y:0},cur={lat:0,lon:0},peak=0,gps=null,prev=null,o=null,line=null,lastX=null,lap=0,laps=[],rows=[],trail=[],strip=[];
 const msg=t=>$('msg').textContent=t;
 
 function axes(a){
@@ -112,16 +112,28 @@ function crossing(p,q){
 }
 const fmt=ms=>{const s=ms/1000;return Math.floor(s/60)+':'+(s%60).toFixed(3).padStart(6,'0')};
 
+function stopSensors(){
+  removeEventListener('devicemotion',onMotion);
+  if(wid!==null)navigator.geolocation.clearWatch(wid);
+  wid=null;
+  try{if(wl)wl.release();}catch(_){}
+  wl=null;run=false;gps=null;prev=null;
+  $('bRec').classList.remove('on');$('bRec').textContent='記録 開始';
+  ['bRec','bCal','bLine'].forEach(i=>$(i).disabled=true);
+  $('bStart').textContent='センサー開始';$('bStart').classList.remove('on');
+  msg('センサー停止。画面を消せます（記録 '+rows.length+'行）。CSVは保存できます。');
+}
 $('bStart').onclick=async()=>{
+  if(wid!==null){stopSensors();return;}
   try{
     if(typeof DeviceMotionEvent!=='undefined'&&DeviceMotionEvent.requestPermission){
       if(await DeviceMotionEvent.requestPermission()!=='granted'){msg('モーションセンサーの許可が必要です。Safariを再読み込みして再度許可してください。');return;}
     }
     addEventListener('devicemotion',onMotion);
-    navigator.geolocation.watchPosition(onGps,e=>msg('GPSエラー: '+e.message),{enableHighAccuracy:true,maximumAge:0,timeout:10000});
-    try{await navigator.wakeLock.request('screen');}catch(_){}
+    wid=navigator.geolocation.watchPosition(onGps,e=>msg('GPSエラー: '+e.message),{enableHighAccuracy:true,maximumAge:0,timeout:10000});
+    try{wl=await navigator.wakeLock.request('screen');}catch(_){}
     ['bRec','bCal','bLine','bCsv'].forEach(i=>$(i).disabled=false);
-    $('bStart').disabled=true; msg('センサー動作中。停車中にゼロ較正→記録開始。');
+    $('bStart').textContent='センサー停止（省電力）';$('bStart').classList.add('on');draw();msg('センサー動作中。停車中にゼロ較正→記録開始。');
   }catch(e){msg('開始できません: '+e.message+'（HTTPSで開いていますか？）');}
 };
 $('bCal').onclick=()=>{cal={x:0,y:0,n:0};msg('較正中…1.5秒間動かさないでください');
@@ -161,7 +173,7 @@ function draw(){
   s.clearRect(0,0,W,H);s.strokeStyle=css('--ln');s.beginPath();s.moveTo(0,H/2);s.lineTo(W,H/2);s.stroke();
   s.strokeStyle=css('--ac');s.lineWidth=2;s.beginPath();
   strip.forEach((p,i)=>{const x=W-(now-p[0])/10000*W,y=H/2-p[1]/R*(H/2-4);i?s.lineTo(x,y):s.moveTo(x,y);});s.stroke();
-  requestAnimationFrame(draw);
+  if(wid!==null)requestAnimationFrame(draw);
 }
 draw();
 </script>
